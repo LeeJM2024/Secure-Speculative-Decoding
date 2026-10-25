@@ -11,11 +11,22 @@ from dataset import get_dataset_adapter
 
 def get_model_paths(args):
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-    target_path = snapshot_download(args.target_model, cache_dir=args.hf_root)
+    patterns = ["*.safetensors", "*.json", "*.txt", "*.jinja"]
+    target_path = snapshot_download(
+        args.target_model, cache_dir=args.hf_root,
+        revision=getattr(args, "target_revision", None), allow_patterns=patterns,
+        local_files_only=getattr(args, "local_files_only", False),
+    )
     target_name = target_path.split("/models--", 1)[1].split("/snapshots/", 1)[0]
 
-    draft_path = snapshot_download(args.draft_model, cache_dir=args.hf_root)
+    draft_path = snapshot_download(
+        args.draft_model, cache_dir=args.hf_root,
+        revision=getattr(args, "draft_revision", None), allow_patterns=patterns,
+        local_files_only=getattr(args, "local_files_only", False),
+    )
     draft_name = draft_path.split("/models--", 1)[1].split("/snapshots/", 1)[0]
+    args.target_revision = os.path.basename(target_path)
+    args.draft_revision = os.path.basename(draft_path)
     return target_name, target_path, draft_name, draft_path
 
 
@@ -41,9 +52,9 @@ def create_llm_kwargs(args, target_path, draft_path):
 
 
 def run_benchmark(llm, prompts, sampling_params):
-    start_time = time.time()
+    start_time = time.perf_counter()
     outputs, metrics = llm.generate(prompts, sampling_params)
-    total_time = time.time() - start_time
+    total_time = time.perf_counter() - start_time
     return outputs, total_time, metrics
 
 
@@ -246,7 +257,7 @@ def compute_efficiency_metrics(_prompts, outputs, total_time, _model_path, _batc
     latency_inv_stats = _mean_std(latency_inv_values)
     output_tps = _safe_div(decode_tokens, total_time)
     scheduled_f = [float(x) for x in step_scheduled]
-    return {
+    efficiency = {
         "time_s": total_time,
         "num_requests": request_count,
         "decode_tokens": decode_tokens,
@@ -271,6 +282,10 @@ def compute_efficiency_metrics(_prompts, outputs, total_time, _model_path, _batc
         "time_to_window_count": len(first_n["time_to_n_values_s"]),
         "seq_tps_decode_window_tokens": int(args.decode_tps_n),
     }
+    if getattr(args, "backend", "cuda") == "cpu":
+        efficiency.pop("output_tps_per_gpu")
+        efficiency.pop("output_tps_windowed_per_gpu")
+    return efficiency
 
 
 def build_mode_summary(args) -> str:
@@ -357,7 +372,10 @@ def compute_runtime_metrics(metrics: dict, args) -> dict:
     return runtime
 
 def _effective_experiment_name(args) -> str:
-    return str(args.experiment_name)
+    name = str(args.experiment_name)
+    if getattr(args, "backend", "cuda") == "cpu":
+        return f"{name}/cpu_{args.cpu_dtype}_seed{args.seed}_n{args.num_seqs}_o{args.output_len}"
+    return name
 
 
 def _report_filename(args) -> str:
@@ -419,9 +437,17 @@ def write_benchmark_report(args, model_name, total_time, eff, runtime_metrics, r
     merged_metrics = dict(eff)
     merged_metrics.update(runtime_metrics)
     trace_metrics = build_trace_metrics(raw_metrics, args)
+    if trace_metrics is not None and "cpu_rounds" in raw_metrics:
+        trace_metrics["cpu_rounds"] = raw_metrics["cpu_rounds"]
 
     report_payload = {
         "meta": {
+            "backend": getattr(args, "backend", "cuda"),
+            "cpu_dtype": args.cpu_dtype if getattr(args, "backend", "cuda") == "cpu" else None,
+            "cpu_threads": args.cpu_threads if getattr(args, "backend", "cuda") == "cpu" else None,
+            "seed": args.seed if getattr(args, "backend", "cuda") == "cpu" else None,
+            "target_revision": getattr(args, "target_revision", None),
+            "draft_revision": getattr(args, "draft_revision", None),
             "run_name": create_run_name(args),
             "timestamp": datetime.now().isoformat(),
             "dataset": args.dataset,
@@ -433,7 +459,7 @@ def write_benchmark_report(args, model_name, total_time, eff, runtime_metrics, r
             "experiment_name": experiment_name,
             "spec_k": args.speculate_k if is_sd_method(args.method) else None,
             "decode_tps_n": args.decode_tps_n,
-            "num_gpus": args.num_gpus,
+            "num_gpus": args.num_gpus if getattr(args, "backend", "cuda") == "cuda" else None,
             **method_params(args.method, args),
             "eta_schedule": getattr(args, "eta_schedule", None),
             "eta_start": args.eta_start if getattr(args, "eta_schedule", None) else None,
@@ -500,6 +526,9 @@ def maybe_evaluate_utility(args, dataset_bundle, outputs):
 
 
 def print_benchmark_summary(args, model_name, total_time, eff, runtime_metrics, util, dataset_name):
+    backend = getattr(args, "backend", "cuda")
+    if backend == "cpu":
+        print(f"[Backend] CPU, {args.cpu_dtype}, {args.cpu_threads} threads; mechanism demonstration")
     think_mode = "think=on" if args.think else "think=off"
     mode = build_mode_summary(args)
 
@@ -514,11 +543,12 @@ def print_benchmark_summary(args, model_name, total_time, eff, runtime_metrics, 
         )
     print(f"[Model] {model_name}, Mode: {mode}, {think_mode}")
     seq_tps = runtime_metrics["seq_decode_tps"]
+    gpu_summary = f"tok/s/GPU={eff['output_tps_per_gpu']:.2f}, " if backend == "cuda" else ""
     print(
         "[Efficiency] "
         f"time={eff['time_s']:.2f}s, "
         f"output_tps={eff['output_tps']:.2f}tok/s, "
-        f"tok/s/GPU={eff['output_tps_per_gpu']:.2f}, "
+        f"{gpu_summary}"
         f"seq_tps p50/p90={seq_tps['p50']:.2f}/{seq_tps['p90']:.2f}tok/s/seq, "
         f"req/s={eff['request_throughput_rps']:.2f}, "
         f"active_seqs={eff['active_seqs_mean_decode']:.2f}"

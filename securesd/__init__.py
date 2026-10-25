@@ -1,3 +1,9 @@
-from securesd.paths import configure_cuda_arch
+"""Speculative decoding engines and device-independent verification rules."""
 
-CUDA_ARCH = configure_cuda_arch()
+
+def __getattr__(name):
+    if name == "CUDA_ARCH":
+        from securesd.paths import configure_cuda_arch
+
+        return configure_cuda_arch()
+    raise AttributeError(name)

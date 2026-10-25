@@ -19,7 +19,13 @@ from resources import ResourceTracker, format_resources
 def main():
     args = parse_arguments()
 
-    from securesd.engine.llm_engine import LLMEngine
+    if args.backend == "cpu":
+        from securesd.engine.cpu_engine import CPULLMEngine as LLMEngine
+
+        if args.dataset in ("jailbreaking", "prompt_injection") and not args.no_utility_eval:
+            raise ValueError("CPU security runs require --no_utility_eval; judge models are loaded separately.")
+    else:
+        from securesd.engine.llm_engine import LLMEngine
     from securesd.sampling_params import SamplingParams
 
     resources = ResourceTracker()
@@ -27,7 +33,10 @@ def main():
     with resources.phase("model_resolve"):
         target_name, target_path, draft_name, draft_path = get_model_paths(args)
     with resources.phase("engine_init"):
-        llm_engine = LLMEngine(**create_llm_kwargs(args, target_path, draft_path))
+        kwargs = create_llm_kwargs(args, target_path, draft_path)
+        if args.backend == "cpu":
+            kwargs.update(cpu_dtype=args.cpu_dtype, cpu_threads=args.cpu_threads, seed=args.seed)
+        llm_engine = LLMEngine(**kwargs)
     model_name = draft_name if args.method == "ar_draft" else target_name
 
     try:

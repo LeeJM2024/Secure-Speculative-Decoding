@@ -17,17 +17,25 @@ DEFAULT_HF_ROOT = default_hf_root()
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--target_model", type=str, default=DEFAULT_TARGET_MODEL)
+    parser.add_argument("--backend", choices=("cuda", "cpu"), default="cuda")
+    parser.add_argument("--cpu_dtype", choices=("float32", "bfloat16"), default="bfloat16")
+    parser.add_argument("--cpu_threads", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=0, help="CPU sampling RNG seed")
+
+    parser.add_argument("--target_model", type=str, default=None)
     parser.add_argument("--draft_model", type=str, default=DEFAULT_DRAFT_MODEL)
+    parser.add_argument("--target_revision", type=str, default=None)
+    parser.add_argument("--draft_revision", type=str, default=None)
+    parser.add_argument("--local_files_only", action="store_true", help="Use cached model snapshots without network requests")
     parser.add_argument("--hf_root", type=str, default=DEFAULT_HF_ROOT,
                         help="HuggingFace hub cache directory to resolve models from.")
     parser.add_argument("--kvcache_block_size", type=int, default=256)
     parser.add_argument("--max_num_seqs", type=int, default=1)
-    parser.add_argument("--max_model_len", type=int, default=16384)
+    parser.add_argument("--max_model_len", type=int, default=None)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.7)
     parser.add_argument("--draft_gpu_memory_utilization", type=float, default=0.75)
-    parser.add_argument("--decode_tps_n", type=int, default=256)
+    parser.add_argument("--decode_tps_n", type=int, default=None)
     parser.add_argument("--num_gpus", type=int, default=1)
 
     parser.add_argument("--method", type=str, choices=METHOD_CHOICES, required=True)
@@ -46,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eta_len", type=float, default=2.0)
     parser.add_argument("--eta_gamma", type=float, default=1.0)
 
-    parser.add_argument("--num_seqs", type=int, default=200)
+    parser.add_argument("--num_seqs", type=int, default=None)
     parser.add_argument("--dataset", type=str, choices=DATASET_CHOICES, default="humaneval")
     parser.add_argument("--prompt_offset", type=int, default=0)
     parser.add_argument("--utility_timeout", type=float, default=3.0)
@@ -62,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--temp", type=float, default=0.0)
     parser.add_argument("--dtemp", type=float, default=0.0)
-    parser.add_argument("--output_len", type=int, default=8192)
+    parser.add_argument("--output_len", type=int, default=None)
     parser.add_argument("--think", type=int, choices=[0, 1], default=0)
 
     parser.add_argument("--experiment_name", type=str, default="default_experiment")
@@ -74,6 +82,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_arguments(argv: list[str] | None = None):
     args = build_parser().parse_args(argv)
+    cpu = args.backend == "cpu"
+    if args.target_model is None:
+        args.target_model = "Qwen/Qwen3-1.7B" if cpu else DEFAULT_TARGET_MODEL
+    if args.num_seqs is None:
+        args.num_seqs = 1 if cpu else 200
+    if args.output_len is None:
+        args.output_len = 32 if cpu else 8192
+    if args.max_model_len is None:
+        args.max_model_len = 4096 if cpu else 16384
+    if args.decode_tps_n is None:
+        args.decode_tps_n = args.output_len if cpu else 256
     args.think = bool(args.think)
     args.hf_root = os.path.expanduser(args.hf_root)
     return args

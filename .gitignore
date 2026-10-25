@@ -10,6 +10,7 @@ dist/
 
 # Virtual environments
 .venv/
+.venv-cpu/
 venv/
 env/
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import resource
 from contextlib import contextmanager
 
 import torch
@@ -35,6 +36,7 @@ class ResourceTracker:
         out: dict = {
             "wall_time_s": time.perf_counter() - self._start,
             "phase_time_s": dict(self.phases),
+            "process_peak_rss_gb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 ** 2),
         }
         if not self._cuda():
             return out
@@ -54,7 +56,10 @@ class ResourceTracker:
 def format_resources(res: dict) -> str:
     phases = ", ".join(f"{k}={v:.1f}s" for k, v in res.get("phase_time_s", {}).items())
     if "peak_memory_reserved_gb" not in res:
-        return f"wall={res['wall_time_s']:.1f}s ({phases})"
+        return (
+            f"wall={res['wall_time_s']:.1f}s ({phases}), "
+            f"peak process RAM={res['process_peak_rss_gb']:.2f} GiB"
+        )
     return (
         f"wall={res['wall_time_s']:.1f}s ({phases}), "
         f"peak GPU mem alloc/reserved="

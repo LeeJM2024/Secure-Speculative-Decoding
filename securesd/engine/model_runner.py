@@ -3,6 +3,10 @@ import gc
 import torch
 from transformers import AutoConfig
 
+from securesd.paths import configure_cuda_arch
+
+configure_cuda_arch()
+
 from securesd.config import Config
 from securesd.engine.helpers.cudagraph_helpers import (
     capture_cudagraph,
